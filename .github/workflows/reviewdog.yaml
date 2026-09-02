@@ -1,0 +1,54 @@
+# reviewdog/action-suggester will not fail if suggestions are not related to files changed in this PR.
+# Those cases should be covered by the prek workflow, so it's not critical if it doesn't fail here.
+
+name: reviewdog
+"on":
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: reviewdog / Python
+    runs-on: ubuntu-slim
+
+    permissions:
+      contents: read
+      checks: write # needed by reviewdog
+      issues: write # needed by reviewdog
+      pull-requests: write # needed by reviewdog
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          show-progress: false
+          persist-credentials: false
+
+      - name: Lint code with Ruff
+        uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
+        with:
+          # always exit with zero exit code to always hand over to reviewdog.
+          # CI failure will happen in the prek workflow anyway.
+          args: check --fix --exit-zero
+
+      - name: Suggest Ruff check fixes
+        uses: reviewdog/action-suggester@2558ba17e65a9039e73764a73009fc05fef28a46 # v1.24.3
+        with:
+          tool_name: ruff-check
+          fail_level: any
+
+      - name: Format code with Ruff
+        uses: astral-sh/ruff-action@278981a28ce3188b1e39527901f38254bf3aac89 # v4.1.0
+        with:
+          args: format
+
+      - name: Suggest Ruff formatting fixes
+        uses: reviewdog/action-suggester@2558ba17e65a9039e73764a73009fc05fef28a46 # v1.24.3
+        with:
+          tool_name: ruff-format
+          fail_level: any

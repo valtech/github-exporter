@@ -1,0 +1,34 @@
+[project]
+name = "github-exporter"
+version = "0.1.0"
+description = "GitHub metrics exporter."
+readme = "README.md"
+authors = [
+    { name = "Richard Schwab", email = "richard.schwab@valtech.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "aiohttp[speedups]==3.14.3",
+    "githubkit==0.16.1",
+    "githubkit-schemas[ghec-2026-03-10]==26.8.14",
+    "prometheus-client==0.26.0",
+]
+
+[project.scripts]
+github-exporter = "github_exporter.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff==0.16.4",
+    "ty==0.0.73",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["B", "I", "UP"]

@@ -1,0 +1,26 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# JetBrains PyCharm
+.idea
+
+# Local tool caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.ty_cache/
+
+# Git metadata
+.git
+
+# GitHub and development tool configuration
+.github/
+.pre-commit-config.yaml
