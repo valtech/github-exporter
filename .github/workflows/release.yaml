@@ -1,0 +1,180 @@
+name: Create GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: Release version in vX.Y.Z format (must match pyproject.toml)
+        required: true
+        type: string
+
+run-name: Release ${{ inputs.release_version }} from the default branch
+
+concurrency:
+  group: github-release-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  build:
+    name: Validate, check, and build
+    # Ensure this only runs on default branch
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      commit-sha: ${{ steps.validate.outputs.commit-sha }}
+      release-version: ${{ steps.validate.outputs.release-version }}
+      image-sha256: ${{ steps.checksums.outputs.image-sha256 }}
+      checksum-sha256: ${{ steps.checksums.outputs.checksum-sha256 }}
+
+    steps:
+      - name: Check out the workflow commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Validate release request and source commit
+        id: validate
+        env:
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "release_version must be a semantic version in the exact vX.Y.Z format." >&2
+            exit 1
+          fi
+
+          project_version="$(sed -nE 's/^version = "([^"]+)"$/\1/p' pyproject.toml | head -n 1)"
+          if [[ "v$project_version" != "$RELEASE_VERSION" ]]; then
+            echo "release_version ($RELEASE_VERSION) must match pyproject.toml (v$project_version)." >&2
+            exit 1
+          fi
+
+          commit_sha="$(git rev-parse --verify HEAD^{commit})"
+          if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Unable to resolve the checked-out source to an immutable commit SHA." >&2
+            exit 1
+          fi
+
+          {
+            echo "commit-sha=$commit_sha"
+            echo "release-version=$RELEASE_VERSION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          # Ensure cache can't affect release workflows
+          enable-cache: false
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Run prek
+        uses: j178/prek-action@5337cb91e0fa35a7ff31b9ca345126d8bbbcdf16 # v2.0.6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build container image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          tags: github-exporter:${{ steps.validate.outputs.release-version }}
+          outputs: type=docker,dest=${{ github.workspace }}/github-exporter-image.tar
+
+      - name: Create container image checksums
+        id: checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_sha256="$(sha256sum github-exporter-image.tar | awk '{print $1}')"
+          printf '%s  %s\n' "$image_sha256" github-exporter-image.tar > github-exporter-image.tar.sha256
+          checksum_sha256="$(sha256sum github-exporter-image.tar.sha256 | awk '{print $1}')"
+          {
+            echo "image-sha256=$image_sha256"
+            echo "checksum-sha256=$checksum_sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified container image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: github-release-assets
+          path: |
+            github-exporter-image.tar
+            github-exporter-image.tar.sha256
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    # Ensure this only runs on default branch
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # required to create the tag and GitHub Release
+    environment:
+      name: github-releases
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.build.outputs.release-version }}
+
+    steps:
+      - name: Download verified container image
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: github-release-assets
+          path: release-assets
+
+      - name: Verify build job inputs
+        env:
+          CHECKSUM_SHA256: ${{ needs.build.outputs.checksum-sha256 }}
+          COMMIT_SHA: ${{ needs.build.outputs.commit-sha }}
+          IMAGE_SHA256: ${{ needs.build.outputs.image-sha256 }}
+          RELEASE_VERSION: ${{ needs.build.outputs.release-version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+             [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "$IMAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+             [[ ! "$CHECKSUM_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "Invalid release data received from build job." >&2
+            exit 1
+          fi
+
+      - name: Validate asset checksums
+        env:
+          CHECKSUM_SHA256: ${{ needs.build.outputs.checksum-sha256 }}
+          IMAGE_SHA256: ${{ needs.build.outputs.image-sha256 }}
+        shell: bash
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+
+          sha256sum --check --strict github-exporter-image.tar.sha256
+          [[ "$(sha256sum github-exporter-image.tar | awk '{print $1}')" == "$IMAGE_SHA256" ]]
+          [[ "$(sha256sum github-exporter-image.tar.sha256 | awk '{print $1}')" == "$CHECKSUM_SHA256" ]]
+
+      - name: Create GitHub Release
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
+        with:
+          allowUpdates: false
+          artifactErrorsFailBuild: true
+          artifacts: release-assets/github-exporter-image.tar,release-assets/github-exporter-image.tar.sha256
+          commit: ${{ needs.build.outputs.commit-sha }}
+          generateReleaseNotes: true
+          immutableCreate: true
+          name: ${{ needs.build.outputs.release-version }}
+          tag: ${{ needs.build.outputs.release-version }}
