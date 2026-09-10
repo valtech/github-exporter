@@ -118,10 +118,10 @@ docker run --rm \
 Run the [`Create GitHub Release`](https://github.com/valtech/github-exporter/actions/workflows/release.yaml)
 workflow from the repository's default branch
 and use the version in `pyproject.toml`. It publishes the built container
-archive and its SHA-256 checksum as GitHub Release assets.
+image to GHCR with that release tag only.
 
-The workflow creates a draft, uploads the verified assets, and publishes it as
-an immutable GitHub release.
+The workflow creates a draft and publishes it as an immutable GitHub release
+for the verified image.
 
 ## Development
 
