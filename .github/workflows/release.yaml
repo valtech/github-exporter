@@ -16,6 +16,9 @@ concurrency:
 
 permissions: {}
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
   build:
     name: Validate, check, and build
@@ -28,6 +31,7 @@ jobs:
     outputs:
       commit-sha: ${{ steps.validate.outputs.commit-sha }}
       release-version: ${{ steps.validate.outputs.release-version }}
+      image-name: ${{ steps.validate.outputs.image-name }}
       image-sha256: ${{ steps.checksums.outputs.image-sha256 }}
       checksum-sha256: ${{ steps.checksums.outputs.checksum-sha256 }}
 
@@ -64,8 +68,15 @@ jobs:
             exit 1
           fi
 
+          image_name="$REGISTRY/${GITHUB_REPOSITORY,,}"
+          if [[ ! "$image_name" =~ ^ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$ ]]; then
+            echo "Unable to derive a valid GHCR image name from $GITHUB_REPOSITORY." >&2
+            exit 1
+          fi
+
           {
             echo "commit-sha=$commit_sha"
+            echo "image-name=$image_name"
             echo "release-version=$RELEASE_VERSION"
           } >> "$GITHUB_OUTPUT"
 
@@ -90,7 +101,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: false
-          tags: github-exporter:${{ steps.validate.outputs.release-version }}
+          tags: ${{ steps.validate.outputs.image-name }}:${{ steps.validate.outputs.release-version }}
           outputs: type=docker,dest=${{ github.workspace }}/github-exporter-image.tar
 
       - name: Create container image checksums
@@ -106,7 +117,7 @@ jobs:
             echo "checksum-sha256=$checksum_sha256"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload verified container image
+      - name: Upload image for release job
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: github-release-assets
@@ -125,12 +136,13 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write # required to create the tag and GitHub Release
+      packages: write # required to push to ghcr
     environment:
       name: github-releases
       url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.build.outputs.release-version }}
 
     steps:
-      - name: Download verified container image
+      - name: Download image from build job
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: github-release-assets
@@ -140,6 +152,7 @@ jobs:
         env:
           CHECKSUM_SHA256: ${{ needs.build.outputs.checksum-sha256 }}
           COMMIT_SHA: ${{ needs.build.outputs.commit-sha }}
+          IMAGE_NAME: ${{ needs.build.outputs.image-name }}
           IMAGE_SHA256: ${{ needs.build.outputs.image-sha256 }}
           RELEASE_VERSION: ${{ needs.build.outputs.release-version }}
         shell: bash
@@ -148,6 +161,7 @@ jobs:
 
           if [[ ! "$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
              [[ ! "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "$IMAGE_NAME" =~ ^ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$ ]] ||
              [[ ! "$IMAGE_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
              [[ ! "$CHECKSUM_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
             echo "Invalid release data received from build job." >&2
@@ -167,12 +181,28 @@ jobs:
           [[ "$(sha256sum github-exporter-image.tar | awk '{print $1}')" == "$IMAGE_SHA256" ]]
           [[ "$(sha256sum github-exporter-image.tar.sha256 | awk '{print $1}')" == "$CHECKSUM_SHA256" ]]
 
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish container image
+        env:
+          IMAGE_NAME: ${{ needs.build.outputs.image-name }}
+          RELEASE_VERSION: ${{ needs.build.outputs.release-version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker load --input release-assets/github-exporter-image.tar
+          docker push "$IMAGE_NAME:$RELEASE_VERSION"
+
       - name: Create GitHub Release
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           allowUpdates: false
-          artifactErrorsFailBuild: true
-          artifacts: release-assets/github-exporter-image.tar,release-assets/github-exporter-image.tar.sha256
           commit: ${{ needs.build.outputs.commit-sha }}
           generateReleaseNotes: true
           immutableCreate: true
