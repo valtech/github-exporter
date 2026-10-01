@@ -37,7 +37,7 @@ jobs:
           args: check --fix --exit-zero
 
       - name: Suggest Ruff check fixes
-        uses: reviewdog/action-suggester@2558ba17e65a9039e73764a73009fc05fef28a46 # v1.24.3
+        uses: reviewdog/action-suggester@c387862ad6765a9729f2b40ee4d8b5769f2145c7 # v1.26.1
         with:
           tool_name: ruff-check
           fail_level: any
@@ -48,7 +48,7 @@ jobs:
           args: format
 
       - name: Suggest Ruff formatting fixes
-        uses: reviewdog/action-suggester@2558ba17e65a9039e73764a73009fc05fef28a46 # v1.24.3
+        uses: reviewdog/action-suggester@c387862ad6765a9729f2b40ee4d8b5769f2145c7 # v1.26.1
         with:
           tool_name: ruff-format
           fail_level: any
